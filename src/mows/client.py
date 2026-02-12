@@ -41,8 +41,7 @@ class EventBridge:
         if self._last_mouse_pos is not None:
             lx, ly = self._last_mouse_pos
             dx, dy = x - lx, y - ly
-            if dx or dy:
-                self._put(mouse_move_event(dx, dy))
+            self._put(mouse_move_event(dx, dy))
         # When suppress=True the cursor is frozen; each callback reports
         # frozen_pos + this_event's_raw_delta.  Keep _last pinned to the
         # frozen position so we always subtract it, yielding the true delta.
