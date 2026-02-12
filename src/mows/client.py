@@ -16,12 +16,15 @@ from .protocol import (
     mouse_scroll_event,
 )
 
+_TOGGLE = object()  # sentinel queued on Ctrl+Tab
+
 
 class EventBridge:
     """Bridges pynput listener threads to an asyncio queue.
 
-    Detects Ctrl+Esc hotkey — sends key releases for both keys to the
-    server, then queues a None sentinel to stop the send loop cleanly.
+    Hotkeys (always detected regardless of active/paused state):
+      Ctrl+Tab  — toggle between ACTIVE and PAUSED
+      Ctrl+Esc  — stop the client
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
@@ -29,6 +32,7 @@ class EventBridge:
         self._loop = loop
         self._queue = queue
         self._suppress = suppress
+        self._active = True
         self._ctrl_pressed = False
         self._ctrl_key = None
         self._last_mouse_pos = None
@@ -38,6 +42,8 @@ class EventBridge:
 
     # mouse callbacks
     def on_move(self, x, y):
+        if not self._active:
+            return
         if self._last_mouse_pos is not None:
             lx, ly = self._last_mouse_pos
             dx, dy = x - lx, y - ly
@@ -49,11 +55,15 @@ class EventBridge:
             self._last_mouse_pos = (x, y)
 
     def on_click(self, x, y, button, pressed):
+        if not self._active:
+            return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
         self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
+        if not self._active:
+            return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
         self._put(mouse_scroll_event(dx, dy))
@@ -63,18 +73,33 @@ class EventBridge:
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_pressed = True
             self._ctrl_key = key
-        elif key == Key.esc and self._ctrl_pressed:
-            # send releases so server doesn't have stuck keys
-            self._put(key_release_event(Key.esc))
-            self._put(key_release_event(self._ctrl_key))
-            self._put(None)  # sentinel: stop send loop
-            return False  # stop keyboard listener
-        self._put(key_press_event(key))
+            if self._active:
+                self._put(key_press_event(key))
+            return
+
+        if self._ctrl_pressed:
+            if key == Key.tab:
+                # Release Ctrl on the server before pausing
+                if self._active:
+                    self._put(key_release_event(self._ctrl_key))
+                    self._put(key_release_event(Key.tab))
+                self._put(_TOGGLE)
+                return
+            if key == Key.esc:
+                if self._active:
+                    self._put(key_release_event(Key.esc))
+                    self._put(key_release_event(self._ctrl_key))
+                self._put(None)  # sentinel: stop send loop
+                return False  # stop keyboard listener
+
+        if self._active:
+            self._put(key_press_event(key))
 
     def on_release(self, key):
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_pressed = False
-        self._put(key_release_event(key))
+        if self._active:
+            self._put(key_release_event(key))
 
 
 async def _send(host: str, port: int, suppress: bool):
@@ -83,33 +108,54 @@ async def _send(host: str, port: int, suppress: bool):
     loop = asyncio.get_running_loop()
     bridge = EventBridge(loop, queue, suppress=suppress)
 
-    mouse_listener = MouseListener(
-        on_move=bridge.on_move,
-        on_click=bridge.on_click,
-        on_scroll=bridge.on_scroll,
-        suppress=suppress,
-    )
-    keyboard_listener = KeyboardListener(
-        on_press=bridge.on_press,
-        on_release=bridge.on_release,
-        suppress=suppress,
-    )
-    mouse_listener.start()
-    keyboard_listener.start()
+    def start_listeners(sup):
+        ml = MouseListener(
+            on_move=bridge.on_move,
+            on_click=bridge.on_click,
+            on_scroll=bridge.on_scroll,
+            suppress=sup,
+        )
+        kl = KeyboardListener(
+            on_press=bridge.on_press,
+            on_release=bridge.on_release,
+            suppress=sup,
+        )
+        ml.start()
+        kl.start()
+        return ml, kl
+
+    active = True
+    ml, kl = start_listeners(suppress)
 
     print(f"connecting to {uri} ...")
     try:
         async with websockets.connect(uri) as ws:
             mode = "suppress ON" if suppress else "suppress off"
-            print(f"connected — streaming events ({mode}, Ctrl+Esc to stop)")
+            print(f"connected — ACTIVE ({mode}, Ctrl+Tab to toggle, Ctrl+Esc to stop)")
             while True:
                 event = await queue.get()
                 if event is None:
                     break
+                if event is _TOGGLE:
+                    ml.stop()
+                    kl.stop()
+                    active = not active
+                    bridge._active = active
+                    bridge._ctrl_pressed = False
+                    bridge._last_mouse_pos = None
+                    sup = suppress if active else False
+                    bridge._suppress = sup
+                    ml, kl = start_listeners(sup)
+                    if active:
+                        mode = "suppress ON" if suppress else "suppress off"
+                        print(f"ACTIVE ({mode})")
+                    else:
+                        print("PAUSED (local input)")
+                    continue
                 await ws.send(event)
     finally:
-        mouse_listener.stop()
-        keyboard_listener.stop()
+        ml.stop()
+        kl.stop()
         print("stopped")
 
 
