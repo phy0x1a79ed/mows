@@ -35,14 +35,16 @@ class CommandLineInterface:
     def send(cls, args):
         parser = ArgumentParser(
             prog=f'{CLI_ENTRY} send',
-            description='Start the mows client (captures and sends events)',
+            description='Start the mows client (captures and sends events). Press Ctrl+Esc to stop.',
         )
         parser.add_argument('--host', default='localhost', help='server address (default: localhost)')
         parser.add_argument('--port', type=int, default=8765, help='port (default: 8765)')
+        parser.add_argument('--suppress', action='store_true', default=False,
+                            help='block input events from reaching the client OS (Windows)')
         parsed = parser.parse_args(args)
 
         from .client import run_client
-        run_client(parsed.host, parsed.port)
+        run_client(parsed.host, parsed.port, parsed.suppress)
 
     @classmethod
     def help(cls, args=None):
