@@ -27,9 +27,8 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController):
 def _dispatch(event: dict, mouse: MouseController, keyboard: KeyboardController):
     t = event["type"]
     if t == "mouse_move":
-        mouse.position = (event["x"], event["y"])
+        mouse.move(event["dx"], event["dy"])
     elif t == "mouse_click":
-        mouse.position = (event["x"], event["y"])
         btn = deserialize_button(event["button"])
         if event["pressed"]:
             mouse.press(btn)

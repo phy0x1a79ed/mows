@@ -60,13 +60,13 @@ mows send --help
 
 ## Protocol
 
-Events are streamed as JSON over WebSocket. Each message has a `"type"` field:
+Events are streamed as JSON over WebSocket. Mouse movement is **relative** (deltas), so client and server screen sizes don't need to match.
 
 | Type | Fields |
 |------|--------|
-| `mouse_move` | `x`, `y` |
-| `mouse_click` | `x`, `y`, `button`, `pressed` |
-| `mouse_scroll` | `x`, `y`, `dx`, `dy` |
+| `mouse_move` | `dx`, `dy` (relative) |
+| `mouse_click` | `button`, `pressed` |
+| `mouse_scroll` | `dx`, `dy` |
 | `key_press` | `key` |
 | `key_release` | `key` |
 

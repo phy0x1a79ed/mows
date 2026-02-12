@@ -28,6 +28,7 @@ class EventBridge:
         self._queue = queue
         self._stop_event = stop_event
         self._ctrl_pressed = False
+        self._last_mouse_pos = None
 
     def _put(self, data: str):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
@@ -37,13 +38,20 @@ class EventBridge:
 
     # mouse callbacks
     def on_move(self, x, y):
-        self._put(mouse_move_event(x, y))
+        if self._last_mouse_pos is not None:
+            lx, ly = self._last_mouse_pos
+            dx, dy = x - lx, y - ly
+            if dx or dy:
+                self._put(mouse_move_event(dx, dy))
+        self._last_mouse_pos = (x, y)
 
     def on_click(self, x, y, button, pressed):
-        self._put(mouse_click_event(x, y, button, pressed))
+        self._last_mouse_pos = (x, y)
+        self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
-        self._put(mouse_scroll_event(x, y, dx, dy))
+        self._last_mouse_pos = (x, y)
+        self._put(mouse_scroll_event(dx, dy))
 
     # keyboard callbacks
     def on_press(self, key):

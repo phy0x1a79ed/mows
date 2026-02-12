@@ -47,23 +47,21 @@ def deserialize_button(name: str):
 
 # ── Event constructors ────────────────────────────────────────────
 
-def mouse_move_event(x: int, y: int) -> str:
-    return json.dumps({"type": "mouse_move", "x": x, "y": y})
+def mouse_move_event(dx: int, dy: int) -> str:
+    return json.dumps({"type": "mouse_move", "dx": dx, "dy": dy})
 
 
-def mouse_click_event(x: int, y: int, button, pressed: bool) -> str:
+def mouse_click_event(button, pressed: bool) -> str:
     return json.dumps({
         "type": "mouse_click",
-        "x": x, "y": y,
         "button": serialize_button(button),
         "pressed": pressed,
     })
 
 
-def mouse_scroll_event(x: int, y: int, dx: int, dy: int) -> str:
+def mouse_scroll_event(dx: int, dy: int) -> str:
     return json.dumps({
         "type": "mouse_scroll",
-        "x": x, "y": y,
         "dx": dx, "dy": dy,
     })
 
