@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import pyperclip
 import websockets
 from pynput.keyboard import Controller as KeyboardController
 from pynput.mouse import Controller as MouseController
@@ -16,7 +17,7 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController):
         try:
             async for message in websocket:
                 event = json.loads(message)
-                _dispatch(event, mouse, keyboard)
+                await _dispatch(event, websocket, mouse, keyboard)
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -24,7 +25,8 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController):
     return handler
 
 
-def _dispatch(event: dict, mouse: MouseController, keyboard: KeyboardController):
+async def _dispatch(event: dict, websocket, mouse: MouseController,
+                    keyboard: KeyboardController):
     t = event["type"]
     if t == "mouse_move":
         mouse.move(event["dx"], event["dy"])
@@ -42,6 +44,13 @@ def _dispatch(event: dict, mouse: MouseController, keyboard: KeyboardController)
     elif t == "key_release":
         key = deserialize_key(event["key"])
         keyboard.release(key)
+    elif t == "clipboard_push":
+        pyperclip.copy(event["text"])
+        print(f"clipboard updated from client ({len(event['text'])} chars)")
+    elif t == "clipboard_pull":
+        text = pyperclip.paste()
+        await websocket.send(json.dumps({"type": "clipboard_data", "text": text}))
+        print(f"clipboard sent to client ({len(text)} chars)")
 
 
 async def _serve(host: str, port: int):

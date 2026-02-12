@@ -45,5 +45,6 @@ if __name__ == "__main__":
         install_requires=[
             "websockets",
             "pynput",
+            "pyperclip",
         ]
     )

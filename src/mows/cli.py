@@ -47,6 +47,32 @@ class CommandLineInterface:
         run_client(parsed.host, parsed.port, parsed.suppress)
 
     @classmethod
+    def copy_to(cls, args):
+        parser = ArgumentParser(
+            prog=f'{CLI_ENTRY} copy-to',
+            description='Copy local clipboard to the server',
+        )
+        parser.add_argument('--host', default='localhost', help='server address (default: localhost)')
+        parser.add_argument('--port', type=int, default=8765, help='port (default: 8765)')
+        parsed = parser.parse_args(args)
+
+        from .client import run_copy_to
+        run_copy_to(parsed.host, parsed.port)
+
+    @classmethod
+    def copy_from(cls, args):
+        parser = ArgumentParser(
+            prog=f'{CLI_ENTRY} copy-from',
+            description='Copy server clipboard to local',
+        )
+        parser.add_argument('--host', default='localhost', help='server address (default: localhost)')
+        parser.add_argument('--port', type=int, default=8765, help='port (default: 8765)')
+        parsed = parser.parse_args(args)
+
+        from .client import run_copy_from
+        run_copy_from(parsed.host, parsed.port)
+
+    @classmethod
     def help(cls, args=None):
         help = [
             f"{NAME} v{VERSION}",
@@ -55,7 +81,7 @@ class CommandLineInterface:
             f"Syntax: {CLI_ENTRY} COMMAND [OPTIONS]",
             f"",
             f"Where COMMAND is one of:",
-        ]+[f"  {k}" for k in COMMANDS]+[
+        ]+[f"  {k.replace('_', '-')}" for k in COMMANDS]+[
             f"",
             f"For additional help, use:",
             f"  {CLI_ENTRY} COMMAND -h/--help",
@@ -70,7 +96,7 @@ def main():
         CommandLineInterface.help()
         return
 
-    cmd = sys.argv[1]
+    cmd = sys.argv[1].replace("-", "_")
     if cmd in COMMANDS:
         getattr(CommandLineInterface, cmd)(sys.argv[2:])
     else:
