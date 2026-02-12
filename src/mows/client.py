@@ -24,9 +24,11 @@ class EventBridge:
     server, then queues a None sentinel to stop the send loop cleanly.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
+                 suppress: bool = False):
         self._loop = loop
         self._queue = queue
+        self._suppress = suppress
         self._ctrl_pressed = False
         self._ctrl_key = None
         self._last_mouse_pos = None
@@ -41,14 +43,20 @@ class EventBridge:
             dx, dy = x - lx, y - ly
             if dx or dy:
                 self._put(mouse_move_event(dx, dy))
-        self._last_mouse_pos = (x, y)
+        # When suppress=True the cursor is frozen; each callback reports
+        # frozen_pos + this_event's_raw_delta.  Keep _last pinned to the
+        # frozen position so we always subtract it, yielding the true delta.
+        if self._last_mouse_pos is None or not self._suppress:
+            self._last_mouse_pos = (x, y)
 
     def on_click(self, x, y, button, pressed):
-        self._last_mouse_pos = (x, y)
+        if not self._suppress:
+            self._last_mouse_pos = (x, y)
         self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
-        self._last_mouse_pos = (x, y)
+        if not self._suppress:
+            self._last_mouse_pos = (x, y)
         self._put(mouse_scroll_event(dx, dy))
 
     # keyboard callbacks
@@ -74,7 +82,7 @@ async def _send(host: str, port: int, suppress: bool):
     uri = f"ws://{host}:{port}"
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
-    bridge = EventBridge(loop, queue)
+    bridge = EventBridge(loop, queue, suppress=suppress)
 
     mouse_listener = MouseListener(
         on_move=bridge.on_move,
