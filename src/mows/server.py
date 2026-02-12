@@ -63,4 +63,7 @@ async def _serve(host: str, port: int):
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8765):
-    asyncio.run(_serve(host, port))
+    try:
+        asyncio.run(_serve(host, port))
+    except KeyboardInterrupt:
+        print('goodbye')
