@@ -1,0 +1,36 @@
+package:
+  name: <NAME>
+  version: <VERSION>
+
+source:
+  url: <TAR>
+  
+build:
+  noarch: python
+  number: 0
+  script: {{ PYTHON }} -m pip install . -vv
+  entry_points:
+<ENTRY>
+
+test:
+  imports:
+    - mows
+  commands:
+    - pip check
+    - mows --help
+  requires:
+    - pip
+
+requirements:
+  host:
+    - python=3.11
+    - pip
+
+  run:
+<REQUIREMENTS>
+
+about:
+  home: https://github.com/hallamlab/mows
+  summary: Mouse and keyboard event streaming over WebSocket
+  license: 'gpl-v3'
+  license_file: ../LICENSE

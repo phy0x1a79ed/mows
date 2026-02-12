@@ -1,0 +1,9 @@
+/*
+
+!/src
+/src/**/__pycache__
+/src/*.egg-info
+
+!/envs
+!/setup.py
+!/LICENSE
