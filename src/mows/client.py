@@ -25,6 +25,10 @@ class EventBridge:
     Hotkeys (always detected regardless of active/paused state):
       Ctrl+Tab  — toggle between ACTIVE and PAUSED
       Ctrl+Esc  — stop the client
+
+    The keyboard listener runs for the entire session (never restarted)
+    so hotkeys always work.  Only the mouse listener is restarted on
+    toggle to change the suppress setting.
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
@@ -102,30 +106,34 @@ class EventBridge:
             self._put(key_release_event(key))
 
 
+def _start_mouse_listener(bridge, sup):
+    ml = MouseListener(
+        on_move=bridge.on_move,
+        on_click=bridge.on_click,
+        on_scroll=bridge.on_scroll,
+        suppress=sup,
+    )
+    ml.start()
+    return ml
+
+
 async def _send(host: str, port: int, suppress: bool):
     uri = f"ws://{host}:{port}"
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
     bridge = EventBridge(loop, queue, suppress=suppress)
 
-    def start_listeners(sup):
-        ml = MouseListener(
-            on_move=bridge.on_move,
-            on_click=bridge.on_click,
-            on_scroll=bridge.on_scroll,
-            suppress=sup,
-        )
-        kl = KeyboardListener(
-            on_press=bridge.on_press,
-            on_release=bridge.on_release,
-            suppress=sup,
-        )
-        ml.start()
-        kl.start()
-        return ml, kl
+    # Keyboard listener runs the entire session — never restarted so the
+    # WH_KEYBOARD_LL hook stays reliably installed.
+    kl = KeyboardListener(
+        on_press=bridge.on_press,
+        on_release=bridge.on_release,
+        suppress=suppress,
+    )
+    kl.start()
 
     active = True
-    ml, kl = start_listeners(suppress)
+    ml = _start_mouse_listener(bridge, suppress)
 
     print(f"connecting to {uri} ...")
     try:
@@ -138,14 +146,12 @@ async def _send(host: str, port: int, suppress: bool):
                     break
                 if event is _TOGGLE:
                     ml.stop()
-                    kl.stop()
                     active = not active
                     bridge._active = active
-                    bridge._ctrl_pressed = False
                     bridge._last_mouse_pos = None
                     sup = suppress if active else False
                     bridge._suppress = sup
-                    ml, kl = start_listeners(sup)
+                    ml = _start_mouse_listener(bridge, sup)
                     if active:
                         mode = "suppress ON" if suppress else "suppress off"
                         print(f"ACTIVE ({mode})")

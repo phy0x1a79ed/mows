@@ -13,11 +13,14 @@ from .protocol import deserialize_button, deserialize_key
 
 def _make_handler(mouse: MouseController, keyboard: KeyboardController):
     async def handler(websocket):
+        # Track position explicitly per connection to avoid drift from
+        # GetCursorPos/SetCursorPos round-trip rounding under DPI scaling.
+        pos = list(mouse.position)
         print(f"client connected: {websocket.remote_address}")
         try:
             async for message in websocket:
                 event = json.loads(message)
-                await _dispatch(event, websocket, mouse, keyboard)
+                await _dispatch(event, websocket, mouse, keyboard, pos)
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -26,10 +29,12 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController):
 
 
 async def _dispatch(event: dict, websocket, mouse: MouseController,
-                    keyboard: KeyboardController):
+                    keyboard: KeyboardController, pos: list):
     t = event["type"]
     if t == "mouse_move":
-        mouse.move(event["dx"], event["dy"])
+        pos[0] += event["dx"]
+        pos[1] += event["dy"]
+        mouse.position = (pos[0], pos[1])
     elif t == "mouse_click":
         btn = deserialize_button(event["button"])
         if event["pressed"]:
