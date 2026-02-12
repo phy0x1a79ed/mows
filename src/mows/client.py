@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 
 import pyperclip
 import websockets
@@ -31,6 +32,8 @@ class EventBridge:
     toggle to change the suppress setting.
     """
 
+    MOVE_INTERVAL = 0.1  # seconds between buffered move flushes
+
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
                  suppress: bool = False):
         self._loop = loop
@@ -40,9 +43,25 @@ class EventBridge:
         self._ctrl_pressed = False
         self._ctrl_key = None
         self._last_mouse_pos = None
+        self._move_lock = threading.Lock()
+        self._pending_dx = 0
+        self._pending_dy = 0
+        self._flush_scheduled = False
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
+
+    # ── buffered mouse movement ──────────────────────────────────────
+
+    def flush_pending_move(self):
+        """Send accumulated mouse deltas now.  Thread-safe."""
+        with self._move_lock:
+            dx, dy = self._pending_dx, self._pending_dy
+            self._pending_dx = 0
+            self._pending_dy = 0
+            self._flush_scheduled = False
+        if dx != 0 or dy != 0:
+            self._put(mouse_move_event(dx, dy))
 
     # mouse callbacks
     def on_move(self, x, y):
@@ -51,7 +70,16 @@ class EventBridge:
         if self._last_mouse_pos is not None:
             lx, ly = self._last_mouse_pos
             dx, dy = x - lx, y - ly
-            self._put(mouse_move_event(dx, dy))
+            with self._move_lock:
+                self._pending_dx += dx
+                self._pending_dy += dy
+                if not self._flush_scheduled:
+                    self._flush_scheduled = True
+                    self._loop.call_soon_threadsafe(
+                        self._loop.call_later,
+                        self.MOVE_INTERVAL,
+                        self.flush_pending_move,
+                    )
         # When suppress=True the cursor is frozen; each callback reports
         # frozen_pos + this_event's_raw_delta.  Keep _last pinned to the
         # frozen position so we always subtract it, yielding the true delta.
@@ -63,6 +91,7 @@ class EventBridge:
             return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
+        self.flush_pending_move()
         self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
@@ -70,6 +99,7 @@ class EventBridge:
             return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
+        self.flush_pending_move()
         self._put(mouse_scroll_event(dx, dy))
 
     # keyboard callbacks
@@ -91,6 +121,7 @@ class EventBridge:
                 return
             if key == Key.esc:
                 if self._active:
+                    self.flush_pending_move()
                     self._put(key_release_event(Key.esc))
                     self._put(key_release_event(self._ctrl_key))
                 self._put(None)  # sentinel: stop send loop
@@ -146,6 +177,7 @@ async def _send(host: str, port: int, suppress: bool):
                     break
                 if event is _TOGGLE:
                     ml.stop()
+                    bridge.flush_pending_move()
                     active = not active
                     bridge._active = active
                     bridge._last_mouse_pos = None
