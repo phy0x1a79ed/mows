@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 
 import pyperclip
 import websockets
@@ -11,16 +12,75 @@ from pynput.mouse import Controller as MouseController
 from .protocol import deserialize_button, deserialize_key
 
 
+def _make_rel_mover():
+    """Bypass pynput's mouse.move() to avoid its position read-back,
+    which causes drift from DPI rounding (Win) or async lag (X11).
+
+    On Linux:  XWarpPointer with src=dst=0 does a true relative move
+               without querying the current position first.
+    On Windows: mouse_event(MOUSEEVENTF_MOVE) sends relative pixel
+               deltas directly; DPI awareness is set so coordinates
+               are consistent.
+    """
+    if sys.platform == 'linux':
+        try:
+            import ctypes
+            import ctypes.util
+            path = ctypes.util.find_library('X11')
+            if not path:
+                return None
+            x11 = ctypes.cdll.LoadLibrary(path)
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XFlush.argtypes = [ctypes.c_void_p]
+            x11.XFlush.restype = ctypes.c_int
+            x11.XWarpPointer.argtypes = [
+                ctypes.c_void_p,               # Display *
+                ctypes.c_ulong, ctypes.c_ulong, # src_window, dst_window
+                ctypes.c_int, ctypes.c_int,     # src_x, src_y
+                ctypes.c_uint, ctypes.c_uint,   # src_width, src_height
+                ctypes.c_int, ctypes.c_int,     # dst_x, dst_y
+            ]
+            x11.XWarpPointer.restype = ctypes.c_int
+            dpy = x11.XOpenDisplay(None)
+            if not dpy:
+                return None
+
+            def move(dx, dy):
+                x11.XWarpPointer(dpy, 0, 0, 0, 0, 0, 0, int(dx), int(dy))
+                x11.XFlush(dpy)
+
+            return move
+        except Exception:
+            return None
+
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                pass
+
+            def move(dx, dy):
+                ctypes.windll.user32.mouse_event(0x0001, int(dx), int(dy), 0, 0)
+
+            return move
+        except Exception:
+            return None
+
+    return None
+
+
 def _make_handler(mouse: MouseController, keyboard: KeyboardController):
+    rel_move = _make_rel_mover()
+
     async def handler(websocket):
-        # Track position explicitly per connection to avoid drift from
-        # GetCursorPos/SetCursorPos round-trip rounding under DPI scaling.
-        pos = list(mouse.position)
         print(f"client connected: {websocket.remote_address}")
         try:
             async for message in websocket:
                 event = json.loads(message)
-                await _dispatch(event, websocket, mouse, keyboard, pos)
+                await _dispatch(event, websocket, mouse, keyboard, rel_move)
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -29,12 +89,13 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController):
 
 
 async def _dispatch(event: dict, websocket, mouse: MouseController,
-                    keyboard: KeyboardController, pos: list):
+                    keyboard: KeyboardController, rel_move):
     t = event["type"]
     if t == "mouse_move":
-        pos[0] += event["dx"]
-        pos[1] += event["dy"]
-        mouse.position = (pos[0], pos[1])
+        if rel_move:
+            rel_move(event["dx"], event["dy"])
+        else:
+            mouse.move(event["dx"], event["dy"])
     elif t == "mouse_click":
         btn = deserialize_button(event["button"])
         if event["pressed"]:
