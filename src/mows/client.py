@@ -5,7 +5,7 @@ import json
 
 import pyperclip
 import websockets
-from pynput.keyboard import Key, Listener as KeyboardListener
+from pynput.keyboard import Key, KeyCode, Listener as KeyboardListener
 from pynput.mouse import Listener as MouseListener
 
 from .protocol import (
@@ -17,6 +17,7 @@ from .protocol import (
 )
 
 _TOGGLE = object()  # sentinel queued on Ctrl+Tab
+_PUSH_CLIPBOARD = object()  # sentinel: read local clipboard and push to server
 
 
 class EventBridge:
@@ -40,6 +41,7 @@ class EventBridge:
         self._ctrl_pressed = False
         self._ctrl_key = None
         self._last_mouse_pos = None
+        self._virtual_pos = None
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
@@ -48,15 +50,25 @@ class EventBridge:
     def on_move(self, x, y):
         if not self._active:
             return
-        if self._last_mouse_pos is not None:
-            lx, ly = self._last_mouse_pos
-            dx, dy = x - lx, y - ly
-            self._put(mouse_move_event(dx, dy))
-        # When suppress=True the cursor is frozen; each callback reports
-        # frozen_pos + this_event's_raw_delta.  Keep _last pinned to the
-        # frozen position so we always subtract it, yielding the true delta.
-        if self._last_mouse_pos is None or not self._suppress:
+        if not self._suppress:
+            # Real cursor moves freely — send actual absolute position.
             self._last_mouse_pos = (x, y)
+            self._put(mouse_move_event(x, y))
+        else:
+            # Cursor is frozen; pynput reports frozen_pos + user_delta.
+            if self._last_mouse_pos is None:
+                # First event after activating suppress — pin the frozen
+                # position and initialise the virtual cursor; no send yet
+                # (no meaningful delta until the second event).
+                self._last_mouse_pos = (x, y)
+                self._virtual_pos = (x, y)
+            else:
+                lx, ly = self._last_mouse_pos
+                vx, vy = self._virtual_pos
+                dx, dy = x - lx, y - ly
+                self._virtual_pos = (vx + dx, vy + dy)
+                self._put(mouse_move_event(int(self._virtual_pos[0]),
+                                           int(self._virtual_pos[1])))
 
     def on_click(self, x, y, button, pressed):
         if not self._active:
@@ -86,12 +98,10 @@ class EventBridge:
                 # Release Ctrl on the server before pausing
                 if self._active:
                     self._put(key_release_event(self._ctrl_key))
-                    self._put(key_release_event(Key.tab))
                 self._put(_TOGGLE)
                 return
             if key == Key.esc:
                 if self._active:
-                    self._put(key_release_event(Key.esc))
                     self._put(key_release_event(self._ctrl_key))
                 self._put(None)  # sentinel: stop send loop
                 return False  # stop keyboard listener
@@ -104,6 +114,18 @@ class EventBridge:
             self._ctrl_pressed = False
         if self._active:
             self._put(key_release_event(key))
+        elif self._ctrl_pressed and isinstance(key, KeyCode) and key.char == 'c':
+            self._loop.call_later(0.15, self._queue.put_nowait, _PUSH_CLIPBOARD)
+
+
+def _start_keyboard_listener(bridge, sup):
+    kl = KeyboardListener(
+        on_press=bridge.on_press,
+        on_release=bridge.on_release,
+        suppress=sup,
+    )
+    kl.start()
+    return kl
 
 
 def _start_mouse_listener(bridge, sup):
@@ -117,50 +139,69 @@ def _start_mouse_listener(bridge, sup):
     return ml
 
 
+async def _recv_loop(ws):
+    try:
+        async for message in ws:
+            data = json.loads(message)
+            if data["type"] == "clipboard_push":
+                pyperclip.copy(data["text"])
+                print(f"clipboard received from server ({len(data['text'])} chars)")
+    except websockets.ConnectionClosed:
+        pass
+
+
 async def _send(host: str, port: int, suppress: bool):
     uri = f"ws://{host}:{port}"
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
     bridge = EventBridge(loop, queue, suppress=suppress)
 
-    # Keyboard listener runs the entire session — never restarted so the
-    # WH_KEYBOARD_LL hook stays reliably installed.
-    kl = KeyboardListener(
-        on_press=bridge.on_press,
-        on_release=bridge.on_release,
-        suppress=suppress,
-    )
-    kl.start()
-
     active = True
+    kl = _start_keyboard_listener(bridge, suppress)
     ml = _start_mouse_listener(bridge, suppress)
 
     print(f"connecting to {uri} ...")
     try:
         async with websockets.connect(uri) as ws:
+            recv_task = asyncio.create_task(_recv_loop(ws))
             mode = "suppress ON" if suppress else "suppress off"
             print(f"connected — ACTIVE ({mode}, Ctrl+Tab to toggle, Ctrl+Esc to stop)")
-            while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                if event is _TOGGLE:
-                    ml.stop()
-                    active = not active
-                    bridge._active = active
-                    bridge._last_mouse_pos = None
-                    sup = suppress if active else False
-                    bridge._suppress = sup
-                    ml = _start_mouse_listener(bridge, sup)
-                    if active:
-                        mode = "suppress ON" if suppress else "suppress off"
-                        print(f"ACTIVE ({mode})")
-                    else:
-                        print("PAUSED (local input)")
-                    continue
-                await ws.send(event)
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    if event is _TOGGLE:
+                        if ml is not None:
+                            ml.stop()
+                        kl.stop()
+                        active = not active
+                        bridge._active = active
+                        bridge._last_mouse_pos = None
+                        bridge._virtual_pos = None
+                        if active:
+                            bridge._suppress = suppress
+                            kl = _start_keyboard_listener(bridge, suppress)
+                            ml = _start_mouse_listener(bridge, suppress)
+                            mode = "suppress ON" if suppress else "suppress off"
+                            print(f"ACTIVE ({mode})")
+                        else:
+                            bridge._suppress = False
+                            kl = _start_keyboard_listener(bridge, False)
+                            ml = None
+                            print("PAUSED (local input)")
+                        continue
+                    if event is _PUSH_CLIPBOARD:
+                        text = pyperclip.paste()
+                        await ws.send(json.dumps({"type": "clipboard_push", "text": text}))
+                        print(f"clipboard pushed to server ({len(text)} chars)")
+                        continue
+                    await ws.send(event)
+            finally:
+                recv_task.cancel()
     finally:
-        ml.stop()
+        if ml is not None:
+            ml.stop()
         kl.stop()
         print("stopped")
 
