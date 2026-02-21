@@ -179,7 +179,9 @@ async def _send(host: str, port: int, suppress: bool):
                     if event is _TOGGLE:
                         if ml is not None:
                             ml.stop()
+                            ml.join()
                         kl.stop()
+                        kl.join()
                         bridge._ctrl_pressed = False
                         bridge._hotkey_down = False
                         active = not active
