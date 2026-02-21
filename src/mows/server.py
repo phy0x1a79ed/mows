@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 
 import pyperclip
 import websockets
@@ -9,6 +10,23 @@ from pynput.keyboard import Controller as KeyboardController, Key, KeyCode
 from pynput.mouse import Controller as MouseController
 
 from .protocol import deserialize_button, deserialize_key
+
+
+def _get_screen_bounds():
+    """Return (width, height) of the primary screen, or None on failure."""
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.SetProcessDPIAware()
+            return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+        else:
+            from Xlib.display import Display
+            d = Display()
+            s = d.screen()
+            return (s.width_in_pixels, s.height_in_pixels)
+    except Exception:
+        return None
 
 
 async def _push_clipboard_after_delay(websocket, delay=0.15):
@@ -21,9 +39,16 @@ async def _push_clipboard_after_delay(websocket, delay=0.15):
         pass
 
 
-def _make_handler(mouse: MouseController, keyboard: KeyboardController):
+def _make_handler(mouse: MouseController, keyboard: KeyboardController,
+                  screen_bounds):
     async def handler(websocket):
         print(f"client connected: {websocket.remote_address}")
+        if screen_bounds:
+            await websocket.send(json.dumps({
+                "type": "screen_bounds",
+                "width": screen_bounds[0],
+                "height": screen_bounds[1],
+            }))
         pressed_keys = set()
         pressed_buttons = set()
         try:
@@ -81,7 +106,10 @@ async def _dispatch(event: dict, websocket, mouse: MouseController,
 async def _serve(host: str, port: int):
     mouse = MouseController()
     keyboard = KeyboardController()
-    handler = _make_handler(mouse, keyboard)
+    screen_bounds = _get_screen_bounds()
+    if screen_bounds:
+        print(f"screen bounds: {screen_bounds[0]}x{screen_bounds[1]}")
+    handler = _make_handler(mouse, keyboard, screen_bounds)
     async with websockets.serve(handler, host, port):
         print(f"mows server listening on {host}:{port}")
         await asyncio.Future()  # run forever

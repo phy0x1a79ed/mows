@@ -39,12 +39,12 @@ class CommandLineInterface:
         )
         parser.add_argument('--host', default='localhost', help='server address (default: localhost)')
         parser.add_argument('--port', type=int, default=8765, help='port (default: 8765)')
-        parser.add_argument('--suppress', action='store_true', default=False,
-                            help='block input events from reaching the client OS (Windows)')
+        parser.add_argument('--no-suppress', action='store_true', default=False,
+                            help='allow input events to reach the client OS (default: suppressed)')
         parsed = parser.parse_args(args)
 
         from .client import run_client
-        run_client(parsed.host, parsed.port, parsed.suppress)
+        run_client(parsed.host, parsed.port, not parsed.no_suppress)
 
     @classmethod
     def copy_to(cls, args):

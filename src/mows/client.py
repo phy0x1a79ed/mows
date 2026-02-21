@@ -48,6 +48,7 @@ class EventBridge:
         self._activating = False     # True while waiting for key/button release
         self._all_held_keys = set()  # all physically pressed keys (always tracked)
         self._activating_mouse = set()  # mouse buttons held during activating wait
+        self._screen_bounds = None   # (width, height) from server
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
@@ -75,9 +76,13 @@ class EventBridge:
                 lx, ly = self._last_mouse_pos
                 vx, vy = self._virtual_pos
                 dx, dy = x - lx, y - ly
-                self._virtual_pos = (vx + dx, vy + dy)
-                self._put(mouse_move_event(int(self._virtual_pos[0]),
-                                           int(self._virtual_pos[1])))
+                vx, vy = vx + dx, vy + dy
+                if self._screen_bounds:
+                    sw, sh = self._screen_bounds
+                    vx = max(0, min(vx, sw - 1))
+                    vy = max(0, min(vy, sh - 1))
+                self._virtual_pos = (vx, vy)
+                self._put(mouse_move_event(int(vx), int(vy)))
 
     def on_click(self, x, y, button, pressed):
         if self._activating:
@@ -180,13 +185,16 @@ def _start_mouse_listener(bridge, sup):
     return ml
 
 
-async def _recv_loop(ws):
+async def _recv_loop(ws, bridge):
     try:
         async for message in ws:
             data = json.loads(message)
             if data["type"] == "clipboard_push":
                 pyperclip.copy(data["text"])
                 print(f"clipboard received from server ({len(data['text'])} chars)")
+            elif data["type"] == "screen_bounds":
+                bridge._screen_bounds = (data["width"], data["height"])
+                print(f"server screen: {data['width']}x{data['height']}")
     except websockets.ConnectionClosed:
         pass
 
@@ -204,7 +212,7 @@ async def _send(host: str, port: int, suppress: bool):
     print(f"connecting to {uri} ...")
     try:
         async with websockets.connect(uri) as ws:
-            recv_task = asyncio.create_task(_recv_loop(ws))
+            recv_task = asyncio.create_task(_recv_loop(ws, bridge))
             mode = "suppress ON" if suppress else "suppress off"
             print(f"connected — ACTIVE ({mode}, Ctrl+Tab to toggle, Ctrl+Esc to stop)")
             try:
