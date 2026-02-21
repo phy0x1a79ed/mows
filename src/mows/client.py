@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import threading
 
 import pyperclip
 import websockets
@@ -28,11 +27,10 @@ class EventBridge:
       Ctrl+Tab  — toggle between ACTIVE and PAUSED
       Ctrl+Esc  — stop the client
 
-    On toggle both keyboard and mouse listeners are fully stopped/restarted.
-    PAUSED starts keyboard with suppress=False so local input is never blocked.
+    The keyboard listener runs for the entire session (never restarted)
+    so hotkeys always work.  Only the mouse listener is restarted on
+    toggle to change the suppress setting.
     """
-
-    MOVE_INTERVAL = 0.1  # seconds between buffered move flushes
 
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
                  suppress: bool = False):
@@ -43,55 +41,40 @@ class EventBridge:
         self._ctrl_pressed = False
         self._ctrl_key = None
         self._last_mouse_pos = None
-        self._move_lock = threading.Lock()
-        self._pending_dx = 0
-        self._pending_dy = 0
-        self._flush_scheduled = False
+        self._virtual_pos = None
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
-
-    # ── buffered mouse movement ──────────────────────────────────────
-
-    def flush_pending_move(self):
-        """Send accumulated mouse deltas now.  Thread-safe."""
-        with self._move_lock:
-            dx, dy = self._pending_dx, self._pending_dy
-            self._pending_dx = 0
-            self._pending_dy = 0
-            self._flush_scheduled = False
-        if dx != 0 or dy != 0:
-            self._put(mouse_move_event(dx, dy))
 
     # mouse callbacks
     def on_move(self, x, y):
         if not self._active:
             return
-        if self._last_mouse_pos is not None:
-            lx, ly = self._last_mouse_pos
-            dx, dy = x - lx, y - ly
-            with self._move_lock:
-                self._pending_dx += dx
-                self._pending_dy += dy
-                if not self._flush_scheduled:
-                    self._flush_scheduled = True
-                    self._loop.call_soon_threadsafe(
-                        self._loop.call_later,
-                        self.MOVE_INTERVAL,
-                        self.flush_pending_move,
-                    )
-        # When suppress=True the cursor is frozen; each callback reports
-        # frozen_pos + this_event's_raw_delta.  Keep _last pinned to the
-        # frozen position so we always subtract it, yielding the true delta.
-        if self._last_mouse_pos is None or not self._suppress:
+        if not self._suppress:
+            # Real cursor moves freely — send actual absolute position.
             self._last_mouse_pos = (x, y)
+            self._put(mouse_move_event(x, y))
+        else:
+            # Cursor is frozen; pynput reports frozen_pos + user_delta.
+            if self._last_mouse_pos is None:
+                # First event after activating suppress — pin the frozen
+                # position and initialise the virtual cursor; no send yet
+                # (no meaningful delta until the second event).
+                self._last_mouse_pos = (x, y)
+                self._virtual_pos = (x, y)
+            else:
+                lx, ly = self._last_mouse_pos
+                vx, vy = self._virtual_pos
+                dx, dy = x - lx, y - ly
+                self._virtual_pos = (vx + dx, vy + dy)
+                self._put(mouse_move_event(int(self._virtual_pos[0]),
+                                           int(self._virtual_pos[1])))
 
     def on_click(self, x, y, button, pressed):
         if not self._active:
             return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
-        self.flush_pending_move()
         self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
@@ -99,7 +82,6 @@ class EventBridge:
             return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
-        self.flush_pending_move()
         self._put(mouse_scroll_event(dx, dy))
 
     # keyboard callbacks
@@ -120,8 +102,6 @@ class EventBridge:
                 return
             if key == Key.esc:
                 if self._active:
-                    self.flush_pending_move()
-                    self._put(key_release_event(Key.esc))
                     self._put(key_release_event(self._ctrl_key))
                 self._put(None)  # sentinel: stop send loop
                 return False  # stop keyboard listener
@@ -195,10 +175,10 @@ async def _send(host: str, port: int, suppress: bool):
                         if ml is not None:
                             ml.stop()
                         kl.stop()
-                        bridge.flush_pending_move()
                         active = not active
                         bridge._active = active
                         bridge._last_mouse_pos = None
+                        bridge._virtual_pos = None
                         if active:
                             bridge._suppress = suppress
                             kl = _start_keyboard_listener(bridge, suppress)
