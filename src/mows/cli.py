@@ -96,6 +96,7 @@ def main():
         CommandLineInterface.help()
         return
 
+    print(NAME, VERSION)
     cmd = sys.argv[1].replace("-", "_")
     if cmd in COMMANDS:
         getattr(CommandLineInterface, cmd)(sys.argv[2:])
