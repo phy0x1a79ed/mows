@@ -47,8 +47,8 @@ def deserialize_button(name: str):
 
 # ── Event constructors ────────────────────────────────────────────
 
-def mouse_move_event(dx: int, dy: int) -> str:
-    return json.dumps({"type": "mouse_move", "dx": dx, "dy": dy})
+def mouse_move_event(x: int, y: int) -> str:
+    return json.dumps({"type": "mouse_move", "x": x, "y": y})
 
 
 def mouse_click_event(button, pressed: bool) -> str:

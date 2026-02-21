@@ -36,6 +36,22 @@ Start the client on the machine where input is captured:
 ```bash
 mows send                         # defaults: localhost:8765
 mows send --host 192.168.1.50 --port 9000
+mows send --suppress              # block input from reaching the client OS
+```
+
+While connected:
+
+- **Ctrl+Tab** — toggle between ACTIVE and PAUSED
+- **Ctrl+Esc** — stop the client
+
+### Clipboard
+
+Copy your local clipboard to the server (or pull the server's clipboard locally) using one-shot WebSocket connections:
+
+```bash
+mows copy-to                      # push local clipboard to server
+mows copy-from                    # pull server clipboard to local
+mows copy-to --host 192.168.1.50 --port 9000
 ```
 
 ### Help
@@ -69,6 +85,9 @@ Events are streamed as JSON over WebSocket. Mouse movement is **relative** (delt
 | `mouse_scroll` | `dx`, `dy` |
 | `key_press` | `key` |
 | `key_release` | `key` |
+| `clipboard_push` | `text` |
+| `clipboard_pull` | _(request)_ |
+| `clipboard_data` | `text` _(response)_ |
 
 ## License
 
