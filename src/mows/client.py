@@ -48,7 +48,7 @@ class EventBridge:
         self._activating = False     # True while waiting for key/button release
         self._all_held_keys = set()  # all physically pressed keys (always tracked)
         self._activating_mouse = set()  # mouse buttons held during activating wait
-        self._screen_bounds = None   # (width, height) from server
+        self._screen_bounds = None   # (x_min, y_min, x_max, y_max) from server
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
@@ -78,9 +78,9 @@ class EventBridge:
                 dx, dy = x - lx, y - ly
                 vx, vy = vx + dx, vy + dy
                 if self._screen_bounds:
-                    sw, sh = self._screen_bounds
-                    vx = max(0, min(vx, sw - 1))
-                    vy = max(0, min(vy, sh - 1))
+                    x0, y0, x1, y1 = self._screen_bounds
+                    vx = max(x0, min(vx, x1 - 1))
+                    vy = max(y0, min(vy, y1 - 1))
                 self._virtual_pos = (vx, vy)
                 self._put(mouse_move_event(int(vx), int(vy)))
 
@@ -193,8 +193,9 @@ async def _recv_loop(ws, bridge):
                 pyperclip.copy(data["text"])
                 print(f"clipboard received from server ({len(data['text'])} chars)")
             elif data["type"] == "screen_bounds":
-                bridge._screen_bounds = (data["width"], data["height"])
-                print(f"server screen: {data['width']}x{data['height']}")
+                bridge._screen_bounds = (data["x_min"], data["y_min"],
+                                         data["x_max"], data["y_max"])
+                print(f"server screen: ({data['x_min']},{data['y_min']}) to ({data['x_max']},{data['y_max']})")
     except websockets.ConnectionClosed:
         pass
 

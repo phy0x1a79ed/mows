@@ -13,18 +13,28 @@ from .protocol import deserialize_button, deserialize_key
 
 
 def _get_screen_bounds():
-    """Return (width, height) of the primary screen, or None on failure."""
+    """Return (x_min, y_min, x_max, y_max) of the total virtual desktop.
+
+    On multi-monitor setups monitors left of or above the primary can
+    produce negative coordinates.
+    """
     try:
         if sys.platform == 'win32':
             import ctypes
             user32 = ctypes.windll.user32
             user32.SetProcessDPIAware()
-            return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+            # SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77,
+            # SM_CXVIRTUALSCREEN=78, SM_CYVIRTUALSCREEN=79
+            x = user32.GetSystemMetrics(76)
+            y = user32.GetSystemMetrics(77)
+            w = user32.GetSystemMetrics(78)
+            h = user32.GetSystemMetrics(79)
+            return (x, y, x + w, y + h)
         else:
             from Xlib.display import Display
             d = Display()
             s = d.screen()
-            return (s.width_in_pixels, s.height_in_pixels)
+            return (0, 0, s.width_in_pixels, s.height_in_pixels)
     except Exception:
         return None
 
@@ -46,8 +56,10 @@ def _make_handler(mouse: MouseController, keyboard: KeyboardController,
         if screen_bounds:
             await websocket.send(json.dumps({
                 "type": "screen_bounds",
-                "width": screen_bounds[0],
-                "height": screen_bounds[1],
+                "x_min": screen_bounds[0],
+                "y_min": screen_bounds[1],
+                "x_max": screen_bounds[2],
+                "y_max": screen_bounds[3],
             }))
         pressed_keys = set()
         pressed_buttons = set()
@@ -108,7 +120,7 @@ async def _serve(host: str, port: int):
     keyboard = KeyboardController()
     screen_bounds = _get_screen_bounds()
     if screen_bounds:
-        print(f"screen bounds: {screen_bounds[0]}x{screen_bounds[1]}")
+        print(f"screen bounds: ({screen_bounds[0]},{screen_bounds[1]}) to ({screen_bounds[2]},{screen_bounds[3]})")
     handler = _make_handler(mouse, keyboard, screen_bounds)
     async with websockets.serve(handler, host, port):
         print(f"mows server listening on {host}:{port}")

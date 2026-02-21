@@ -37,7 +37,7 @@ PYTHONPATH=src python -m mows help
   - **ACTIVE:** both listeners run with the original `suppress` setting; events are forwarded to the server
   - **PAUSED:** mouse listener is not started; keyboard listener runs with `suppress=False` so local input is never blocked
 - Client runs a `_recv_loop` task on the WebSocket to handle incoming messages from the server (e.g. `clipboard_push`, `screen_bounds`)
-- Server sends `screen_bounds` message on connect; client clamps virtual cursor to `[0, width) × [0, height)` when suppress is active
+- Server sends `screen_bounds` message on connect with the total virtual desktop rect `(x_min, y_min, x_max, y_max)` covering all monitors; client clamps virtual cursor to this rect when suppress is active
 - Server uses `websockets.serve` async handler dispatching to pynput controllers
 - Server bypasses pynput's `mouse.move()` for relative movement using direct OS calls (`_make_rel_mover()`): `XWarpPointer` on Linux, `mouse_event(MOUSEEVENTF_MOVE)` on Windows — avoids pynput's internal position read-back which causes drift
 - Protocol is plain JSON, one message per event
