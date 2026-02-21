@@ -42,6 +42,7 @@ class EventBridge:
         self._ctrl_key = None
         self._last_mouse_pos = None
         self._virtual_pos = None
+        self._hotkey_down = False  # True while Ctrl+Tab is physically held
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
@@ -95,10 +96,12 @@ class EventBridge:
 
         if self._ctrl_pressed:
             if key == Key.tab:
-                # Release Ctrl on the server before pausing
-                if self._active:
-                    self._put(key_release_event(self._ctrl_key))
-                self._put(_TOGGLE)
+                if not self._hotkey_down:  # ignore key-repeat
+                    self._hotkey_down = True
+                    # Release Ctrl on the server before pausing
+                    if self._active:
+                        self._put(key_release_event(self._ctrl_key))
+                    self._put(_TOGGLE)
                 return
             if key == Key.esc:
                 if self._active:
@@ -110,6 +113,8 @@ class EventBridge:
             self._put(key_press_event(key))
 
     def on_release(self, key):
+        if key == Key.tab:
+            self._hotkey_down = False
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_pressed = False
         if self._active:
@@ -175,6 +180,8 @@ async def _send(host: str, port: int, suppress: bool):
                         if ml is not None:
                             ml.stop()
                         kl.stop()
+                        bridge._ctrl_pressed = False
+                        bridge._hotkey_down = False
                         active = not active
                         bridge._active = active
                         bridge._last_mouse_pos = None
