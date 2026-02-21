@@ -2,11 +2,12 @@
 
 import asyncio
 import json
+import sys
 
 import pyperclip
 import websockets
 from pynput.keyboard import Key, KeyCode, Listener as KeyboardListener
-from pynput.mouse import Listener as MouseListener
+from pynput.mouse import Controller as MouseController, Listener as MouseListener
 
 from .protocol import (
     key_press_event,
@@ -203,6 +204,28 @@ async def _recv_loop(ws, bridge):
     bridge._put(None)
 
 
+def _center_mouse():
+    """Move the local mouse to the exact pixel center of the screen."""
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.SetProcessDPIAware()
+            cx = user32.GetSystemMetrics(0) // 2
+            cy = user32.GetSystemMetrics(1) // 2
+        else:
+            from Xlib.display import Display
+            d = Display()
+            s = d.screen()
+            cx = s.width_in_pixels // 2
+            cy = s.height_in_pixels // 2
+        mc = MouseController()
+        mc.position = (cx, cy)
+        print(f"mouse centred at ({cx}, {cy})")
+    except Exception as e:
+        print(f"could not centre mouse: {e}")
+
+
 async def _send(host: str, port: int, suppress: bool):
     uri = f"ws://{host}:{port}"
     queue: asyncio.Queue = asyncio.Queue()
@@ -210,6 +233,7 @@ async def _send(host: str, port: int, suppress: bool):
     bridge = EventBridge(loop, queue, suppress=suppress)
 
     active = True
+    _center_mouse()
     kl = _start_keyboard_listener(bridge, suppress)
     ml = _start_mouse_listener(bridge, suppress)
 
