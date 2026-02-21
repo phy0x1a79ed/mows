@@ -198,6 +198,9 @@ async def _recv_loop(ws, bridge):
                 print(f"server screen: ({data['x_min']},{data['y_min']}) to ({data['x_max']},{data['y_max']})")
     except websockets.ConnectionClosed:
         pass
+    # Server gone — tell the send loop to stop.
+    print("server disconnected")
+    bridge._put(None)
 
 
 async def _send(host: str, port: int, suppress: bool):
@@ -274,7 +277,10 @@ async def _send(host: str, port: int, suppress: bool):
                         print(f"clipboard pushed to server ({len(text)} chars)")
                         continue
 
-                    await ws.send(event)
+                    try:
+                        await ws.send(event)
+                    except websockets.ConnectionClosed:
+                        break
             finally:
                 recv_task.cancel()
     finally:
