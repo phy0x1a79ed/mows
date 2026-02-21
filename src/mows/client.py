@@ -16,7 +16,8 @@ from .protocol import (
     mouse_scroll_event,
 )
 
-_TOGGLE = object()  # sentinel queued on Ctrl+Tab
+_TOGGLE   = object()  # sentinel: Ctrl+Tab detected, toggle direction
+_ACTIVATE = object()  # sentinel: all keys/buttons released, complete activation
 _PUSH_CLIPBOARD = object()  # sentinel: read local clipboard and push to server
 
 
@@ -27,9 +28,10 @@ class EventBridge:
       Ctrl+Tab  — toggle between ACTIVE and PAUSED
       Ctrl+Esc  — stop the client
 
-    The keyboard listener runs for the entire session (never restarted)
-    so hotkeys always work.  Only the mouse listener is restarted on
-    toggle to change the suppress setting.
+    On toggle, both keyboard and mouse listeners are fully stopped/restarted.
+    PAUSED starts keyboard with suppress=False so local input is never blocked.
+    PAUSED→ACTIVE is deferred: we wait for all held keys and mouse buttons to
+    be released before going ACTIVE, to avoid ghost key-presses on the server.
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
@@ -42,14 +44,23 @@ class EventBridge:
         self._ctrl_key = None
         self._last_mouse_pos = None
         self._virtual_pos = None
-        self._hotkey_down = False  # True while Ctrl+Tab is physically held
+        self._hotkey_down = False    # True while Ctrl+Tab is physically held
+        self._activating = False     # True while waiting for key/button release
+        self._all_held_keys = set()  # all physically pressed keys (always tracked)
+        self._activating_mouse = set()  # mouse buttons held during activating wait
 
     def _put(self, data):
         self._loop.call_soon_threadsafe(self._queue.put_nowait, data)
 
+    def _check_activate(self):
+        """Fire _ACTIVATE when all held keys and mouse buttons are released."""
+        if self._activating and not self._all_held_keys and not self._activating_mouse:
+            self._activating = False
+            self._put(_ACTIVATE)
+
     # mouse callbacks
     def on_move(self, x, y):
-        if not self._active:
+        if self._activating or not self._active:
             return
         if not self._suppress:
             # Real cursor moves freely — send actual absolute position.
@@ -58,9 +69,6 @@ class EventBridge:
         else:
             # Cursor is frozen; pynput reports frozen_pos + user_delta.
             if self._last_mouse_pos is None:
-                # First event after activating suppress — pin the frozen
-                # position and initialise the virtual cursor; no send yet
-                # (no meaningful delta until the second event).
                 self._last_mouse_pos = (x, y)
                 self._virtual_pos = (x, y)
             else:
@@ -72,6 +80,13 @@ class EventBridge:
                                            int(self._virtual_pos[1])))
 
     def on_click(self, x, y, button, pressed):
+        if self._activating:
+            if pressed:
+                self._activating_mouse.add(button)
+            else:
+                self._activating_mouse.discard(button)
+                self._check_activate()
+            return
         if not self._active:
             return
         if not self._suppress:
@@ -79,7 +94,7 @@ class EventBridge:
         self._put(mouse_click_event(button, pressed))
 
     def on_scroll(self, x, y, dx, dy):
-        if not self._active:
+        if self._activating or not self._active:
             return
         if not self._suppress:
             self._last_mouse_pos = (x, y)
@@ -87,6 +102,18 @@ class EventBridge:
 
     # keyboard callbacks
     def on_press(self, key):
+        self._all_held_keys.add(key)
+
+        if self._activating:
+            # Only allow stop hotkey through while waiting
+            if key in (Key.ctrl_l, Key.ctrl_r):
+                self._ctrl_pressed = True
+                self._ctrl_key = key
+            elif self._ctrl_pressed and key == Key.esc:
+                self._put(None)
+                return False
+            return
+
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_pressed = True
             self._ctrl_key = key
@@ -98,25 +125,34 @@ class EventBridge:
             if key == Key.tab:
                 if not self._hotkey_down:  # ignore key-repeat
                     self._hotkey_down = True
-                    # Release Ctrl on the server before pausing
                     if self._active:
                         self._put(key_release_event(self._ctrl_key))
+                    else:
+                        # PAUSED→ACTIVE: defer until all keys/buttons released
+                        self._activating = True
                     self._put(_TOGGLE)
                 return
             if key == Key.esc:
                 if self._active:
                     self._put(key_release_event(self._ctrl_key))
                 self._put(None)  # sentinel: stop send loop
-                return False  # stop keyboard listener
+                return False     # stop keyboard listener
 
         if self._active:
             self._put(key_press_event(key))
 
     def on_release(self, key):
+        self._all_held_keys.discard(key)
+
         if key == Key.tab:
             self._hotkey_down = False
         if key in (Key.ctrl_l, Key.ctrl_r):
             self._ctrl_pressed = False
+
+        if self._activating:
+            self._check_activate()
+            return
+
         if self._active:
             self._put(key_release_event(key))
         elif self._ctrl_pressed and isinstance(key, KeyCode) and key.char == 'c':
@@ -176,35 +212,59 @@ async def _send(host: str, port: int, suppress: bool):
                     event = await queue.get()
                     if event is None:
                         break
+
                     if event is _TOGGLE:
-                        if ml is not None:
+                        if active:  # ACTIVE → PAUSED (immediate)
                             ml.stop()
                             ml.join()
-                        kl.stop()
-                        kl.join()
-                        bridge._ctrl_pressed = False
-                        bridge._hotkey_down = False
-                        active = not active
-                        bridge._active = active
-                        bridge._last_mouse_pos = None
-                        bridge._virtual_pos = None
-                        if active:
-                            bridge._suppress = suppress
-                            kl = _start_keyboard_listener(bridge, suppress)
-                            ml = _start_mouse_listener(bridge, suppress)
-                            mode = "suppress ON" if suppress else "suppress off"
-                            print(f"ACTIVE ({mode})")
-                        else:
+                            kl.stop()
+                            kl.join()
+                            bridge._ctrl_pressed = False
+                            bridge._hotkey_down = False
+                            bridge._activating = False
+                            bridge._all_held_keys.clear()
+                            active = False
+                            bridge._active = False
+                            bridge._last_mouse_pos = None
+                            bridge._virtual_pos = None
                             bridge._suppress = False
                             kl = _start_keyboard_listener(bridge, False)
                             ml = None
                             print("PAUSED (local input)")
+                        else:  # PAUSED → ACTIVE deferred (bridge sets _activating=True)
+                            # Start mouse listener so button releases are detected;
+                            # on_move/on_scroll are blocked while _activating=True.
+                            bridge._activating_mouse.clear()
+                            bridge._last_mouse_pos = None
+                            bridge._virtual_pos = None
+                            bridge._suppress = suppress
+                            ml = _start_mouse_listener(bridge, suppress)
+                            print("ACTIVATING (release all keys and buttons)...")
                         continue
+
+                    if event is _ACTIVATE:
+                        # All held keys and buttons have been released — go ACTIVE.
+                        kl.stop()
+                        kl.join()
+                        bridge._ctrl_pressed = False
+                        bridge._hotkey_down = False
+                        bridge._all_held_keys.clear()
+                        active = True
+                        bridge._active = True
+                        bridge._last_mouse_pos = None
+                        bridge._virtual_pos = None
+                        kl = _start_keyboard_listener(bridge, suppress)
+                        # ml is already running from the ACTIVATING phase
+                        mode = "suppress ON" if suppress else "suppress off"
+                        print(f"ACTIVE ({mode})")
+                        continue
+
                     if event is _PUSH_CLIPBOARD:
                         text = pyperclip.paste()
                         await ws.send(json.dumps({"type": "clipboard_push", "text": text}))
                         print(f"clipboard pushed to server ({len(text)} chars)")
                         continue
+
                     await ws.send(event)
             finally:
                 recv_task.cancel()
