@@ -276,6 +276,17 @@ async def _send(host: str, port: int, suppress: bool):
                             bridge._suppress = suppress
                             ml = _start_mouse_listener(bridge, suppress)
                             print("ACTIVATING (release all keys and buttons)...")
+
+                            async def _activation_timeout():
+                                await asyncio.sleep(3.0)
+                                if bridge._activating:
+                                    print("ACTIVATING timed out — forcing activation")
+                                    bridge._all_held_keys.clear()
+                                    bridge._activating_mouse.clear()
+                                    bridge._activating = False
+                                    queue.put_nowait(_ACTIVATE)
+
+                            asyncio.create_task(_activation_timeout())
                         continue
 
                     if event is _ACTIVATE:
