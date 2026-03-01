@@ -99,7 +99,7 @@ async def _dispatch(event: dict, websocket, mouse: MouseController,
         key = deserialize_key(event["key"])
         pressed_keys.add(key)
         keyboard.press(key)
-        if (isinstance(key, KeyCode) and key.char in ('c', '\x03')
+        if (isinstance(key, KeyCode) and key.char in ('c', 'C', '\x03')
                 and any(k in pressed_keys for k in (Key.ctrl_l, Key.ctrl_r))):
             asyncio.create_task(_push_clipboard_after_delay(websocket))
     elif t == "key_release":
