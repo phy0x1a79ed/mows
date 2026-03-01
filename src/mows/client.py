@@ -162,7 +162,9 @@ class EventBridge:
         if self._active:
             self._put(key_release_event(key))
         elif self._ctrl_pressed and isinstance(key, KeyCode) and key.char == 'c':
-            self._loop.call_later(0.15, self._queue.put_nowait, _PUSH_CLIPBOARD)
+            self._loop.call_soon_threadsafe(
+                self._loop.call_later, 0.15, self._queue.put_nowait, _PUSH_CLIPBOARD
+            )
 
 
 def _start_keyboard_listener(bridge, sup):
