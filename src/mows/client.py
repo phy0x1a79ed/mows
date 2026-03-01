@@ -161,7 +161,7 @@ class EventBridge:
 
         if self._active:
             self._put(key_release_event(key))
-        elif self._ctrl_pressed and isinstance(key, KeyCode) and key.char == 'c':
+        elif self._ctrl_pressed and isinstance(key, KeyCode) and key.char in ('c', '\x03'):
             self._loop.call_soon_threadsafe(
                 self._loop.call_later, 0.15, self._queue.put_nowait, _PUSH_CLIPBOARD
             )
