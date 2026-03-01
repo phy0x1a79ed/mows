@@ -72,7 +72,8 @@ class EventBridge:
             # Cursor is frozen; pynput reports frozen_pos + user_delta.
             if self._last_mouse_pos is None:
                 self._last_mouse_pos = (x, y)
-                self._virtual_pos = (x, y)
+                if self._virtual_pos is None:
+                    self._virtual_pos = (x, y)
             else:
                 lx, ly = self._last_mouse_pos
                 vx, vy = self._virtual_pos
@@ -264,7 +265,6 @@ async def _send(host: str, port: int, suppress: bool):
                             active = False
                             bridge._active = False
                             bridge._last_mouse_pos = None
-                            bridge._virtual_pos = None
                             bridge._suppress = False
                             kl = _start_keyboard_listener(bridge, False)
                             ml = None
@@ -274,7 +274,6 @@ async def _send(host: str, port: int, suppress: bool):
                             # on_move/on_scroll are blocked while _activating=True.
                             bridge._activating_mouse.clear()
                             bridge._last_mouse_pos = None
-                            bridge._virtual_pos = None
                             bridge._suppress = suppress
                             ml = _start_mouse_listener(bridge, suppress)
                             print("ACTIVATING (release all keys and buttons)...")
@@ -298,10 +297,9 @@ async def _send(host: str, port: int, suppress: bool):
                         bridge._ctrl_pressed = False
                         bridge._hotkey_down = False
                         bridge._all_held_keys.clear()
+                        bridge._last_mouse_pos = MouseController().position
                         active = True
                         bridge._active = True
-                        bridge._last_mouse_pos = None
-                        bridge._virtual_pos = None
                         kl = _start_keyboard_listener(bridge, suppress)
                         # ml is already running from the ACTIVATING phase
                         mode = "suppress ON" if suppress else "suppress off"
